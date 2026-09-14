@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: account_manager_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: account_manager
+      POSTGRES_PASSWORD: account_manager
+      POSTGRES_DB: account_manager
+    ports:
+      # 호스트에 이미 5432를 쓰는 다른 Postgres(다른 프로젝트)가 떠 있어서 55432로 매핑.
+      - "55432:5432"
+    volumes:
+      - account_manager_pgdata:/var/lib/postgresql/data
+
+volumes:
+  account_manager_pgdata:

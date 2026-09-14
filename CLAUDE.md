@@ -12,6 +12,18 @@ Cowork 채팅에서 기획~설계~초기 구현까지 진행하다 이어받는 
 새 기능을 만들기 전에 이 문서와 맞는지 먼저 확인할 것. 문서와 다르게 구현해야 할
 이유가 생기면 문서도 같이 갱신한다.
 
+## 로컬 개발 환경 기동
+
+```
+docker compose up -d          # Postgres (호스트 포트 55432 — 5432는 다른 프로젝트가 씀)
+npx prisma migrate dev        # 최초 1회 또는 schema.prisma 변경 후
+npm run start:dev --workspace=apps-api   # NestJS, 기본 포트 3001
+npm run dev --workspace=apps-web         # Next.js, 기본 포트 3000
+```
+
+`.env`(루트, git에 커밋 안 됨)에 실제 값이 필요하다 — 템플릿은 `.env.example` 참고.
+`apps/web`은 별도로 `apps/web/.env.local`(`NEXT_PUBLIC_API_BASE_URL`)이 필요하다.
+
 ## 지금까지 진행 상태
 
 - [x] 기획서/기술설계서 작성 완료, ERD 6개 이슈 사용자 승인까지 완료
@@ -121,6 +133,31 @@ Cowork 채팅에서 기획~설계~초기 구현까지 진행하다 이어받는 
       - **여전히 안 되는 것**: `GOOGLE_CLIENT_ID`가 `REPLACE_ME`라 실제 Google 로그인은
         브라우저로 끝까지 못 밟아봄, `DATABASE_URL`도 placeholder라 setup/unlock이
         실제 User row를 만들거나 조회하는 것도 아직 확인 불가.
+- [x] 실제 Postgres 연결 + 전체 인증/계정 흐름 E2E 검증 (2026-09-14):
+      - 루트 `docker-compose.yml`(신규) — `postgres:16` 컨테이너. 호스트 포트는 **55432**
+        (5432는 이 컴퓨터에 이미 떠 있는 다른 프로젝트의 Postgres 컨테이너가 쓰고 있어서
+        피함 — 그 컨테이너는 건드리지 않았음). `docker compose up -d`로 기동, 데이터는
+        named volume에 영속.
+      - `.env`의 `DATABASE_URL`을 이 컨테이너로 교체, `npx prisma migrate dev --name init`
+        최초 실행 → `prisma/migrations/20260914060416_init/` 생성, ERD 테이블 10개
+        (`users`, `accounts`, `trusted_devices` 등) 전부 실제 생성 확인. `.env.example`은
+        범용 기본값(5432)을 유지해 다른 환경에서 그대로 쓸 수 있게 둠.
+      - **Google OAuth 콜백 없이 인증/계정 흐름 전체를 E2E로 검증**: `GOOGLE_CLIENT_ID`가
+        아직 `REPLACE_ME`라 브라우저로 실제 Google 로그인은 여전히 못 밟지만, (1) 임시
+        스크립트로 Argon2id 해시 + salt를 가진 테스트 `User`를 DB에 직접 시드하고
+        (2) `GET /auth/google/start`로 정상 발급받은 세션 쿠키를 그대로 쓰되 그 세션 행의
+        `sess` JSON에 `userId`만 수동으로 심어(=Google 콜백이 하는 일과 동일한 상태) "로그인
+        직후" 상태를 재현하는 방식으로, 나머지 전 구간을 실제 HTTP 요청 + 실제 DB로 확인함:
+        `/auth/me`(로그인만/잠금해제 후 상태 변화), `/auth/unlock`(틀린 비밀번호 401 /
+        맞으면 unlocked true — Argon2id 검증 실동작 확인), `POST /accounts`(AES-256-GCM으로
+        암호화되어 저장 — DB에 평문이 없는 것까지 직접 SELECT로 확인), `GET /accounts`
+        (목록에 비밀번호 필드 자체가 없음), `GET /accounts/:id`(원문으로 정확히 복호화됨),
+        중복 계정 409, `/auth/lock` 이후 401, `/auth/logout` 이후 세션 파기까지 전부 기대한
+        그대로 동작. 테스트에 쓴 시드 유저/계정은 검증 후 DB에서 삭제(cascade로 계정도 같이
+        삭제됨).
+      - **이걸로도 못 담아낸 것**: 실제 Google OAuth 코드 교환(Console 등록 필요),
+        WebAuthn 등록/인증의 실제 브라우저-authenticator 왕복(진짜 서명이 필요해서 curl로
+        흉내낼 수 없음, 옵션 발급 자체는 이미 이전에 확인됨).
 - [ ] TypeScript는 `5.9.3`으로 고정되어 있음 (최신 `7.x`는 Nest CLI 빌드 도구와
       호환 안 됨 — 임의로 업그레이드하지 말 것)
 
@@ -144,9 +181,8 @@ Cowork 채팅에서 기획~설계~초기 구현까지 진행하다 이어받는 
   있지만 아직 구현 안 됨 — 지금은 GET(목록/상세)·POST(생성)만 있음.
 - Google Cloud Console에 실제 OAuth 클라이언트 등록이 아직 안 됨 — `.env`의
   `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`이 `REPLACE_ME` placeholder 상태라
-  로그인 흐름 전체를 E2E로 테스트할 수 없음 (사용자가 브라우저에서 직접 등록해야 함).
-- `DATABASE_URL`도 아직 placeholder라 실제 Postgres가 준비되기 전까진 세션 저장/
-  User·Account 생성 등 DB를 실제로 만지는 흐름은 전부 미검증 상태.
+  브라우저로 실제 Google 로그인을 끝까지 밟는 것만 아직 못 함 (사용자가 브라우저에서
+  직접 등록해야 함). 그 외 인증/세션/계정 흐름은 실제 Postgres로 이미 E2E 검증 완료.
 
 ## 설계 원칙 (코드 짤 때 지킬 것 — 기획서 9장)
 
@@ -165,7 +201,8 @@ Cowork 채팅에서 기획~설계~초기 구현까지 진행하다 이어받는 
 1. ~~`npx prisma generate` 실행 → `apps/api` 빌드 성공 확인~~ 완료 (2026-09-09)
 2. Google Cloud Console에서 OAuth 클라이언트 등록 (사용자 본인이 브라우저에서 진행) —
    등록 후 `.env`의 `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`/`GOOGLE_CALLBACK_URL`을
-   실제 값으로 교체하면 로그인 흐름을 실기기에서 처음으로 E2E 테스트할 수 있음
+   실제 값으로 교체하면 로그인 흐름을 실기기에서 처음으로 E2E 테스트할 수 있음. **지금
+   시점에 유일하게 남은, 사용자 본인만 할 수 있는 외부 작업.**
 3. ~~마스터 비밀번호 → 키 유도(Argon2id) + AES-256-GCM 암복호화 유틸 구현~~ 완료 (2026-09-09),
    ~~AuthService/AccountsService에 실제로 연결~~ 완료 (2026-09-14)
 4. ~~WebAuthn 등록/인증 플로우 실제 구현~~ 서버쪽 완료 (2026-09-14) — client-side(PRF로
@@ -174,11 +211,12 @@ Cowork 채팅에서 기획~설계~초기 구현까지 진행하다 이어받는 
    라우트 8개 전부 생성, `/login`·`/accounts`·`/accounts/new`·`/accounts/[id]`는 실제
    백엔드 연동까지 구현. CORS(`FRONTEND_ORIGIN`)와 `google/callback`의 실제 리다이렉트도
    이때 같이 처리함.
-6. 다음 후보 (우선순위 미정, 상황에 따라 선택):
-   - 실제 Postgres 준비 → `DATABASE_URL` 교체 → 로그인/unlock/accounts CRUD/WebAuthn
-     E2E 테스트 — 지금까지는 빌드/타입체크/부분 기동으로만 검증됨. 이게 되면 나머지
-     항목들도 비로소 끝까지 테스트 가능해짐.
-   - Google Cloud Console에서 실제 OAuth 클라이언트 등록 (사용자 본인이 진행)
+6. ~~실제 Postgres 준비 → 로그인/unlock/accounts CRUD E2E 테스트~~ 완료 (2026-09-14) —
+   `docker-compose.yml`(포트 55432), `prisma migrate dev`로 마이그레이션 적용, Google
+   콜백 없이도 세션에 userId를 직접 심는 방식으로 unlock/lock/logout/accounts CRUD
+   전 구간을 실제 DB로 검증함. 남은 건 진짜 Google 코드 교환(2번)과 WebAuthn 실제
+   브라우저 왕복뿐.
+7. 다음 후보 (우선순위 미정, 상황에 따라 선택):
    - WebAuthn client-side(브라우저 `navigator.credentials.*` + PRF로 마스터 비밀번호
      로컬 감싸기) — `apps/web`의 `/settings`에 붙이면 자연스러움
    - `AccountsController`에 PUT/DELETE 추가 (API 명세 3.2에는 있는데 아직 없음)
