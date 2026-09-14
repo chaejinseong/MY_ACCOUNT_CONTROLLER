@@ -1,0 +1,184 @@
+// 계정관리 프로그램 - Prisma 스키마
+// 기반 문서: docs/기술설계서.md v0.4 (ERD 2장)
+//
+// 설계 원칙 (기획서 9장 확장성 참고):
+// - provider_type / condition_type / action_type / channel_type / target_type 는
+//   Prisma enum이 아니라 String으로 둔다. 새 값이 필요할 때 스키마/마이그레이션
+//   변경 없이 애플리케이션 코드에서 값만 추가하면 되도록 하기 위함이다.
+// - AND/OR, 후보 메일 상태(status)처럼 값의 종류가 고정된 것만 enum으로 둔다.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum LogicalOperator {
+  AND
+  OR
+}
+
+enum CandidateStatus {
+  PENDING
+  APPROVED
+  EXCLUDED
+  PROCESSED
+}
+
+/// 앱 사용자. 1인 사용을 전제하지만, 인증 방식이 늘거나 데이터를 이전할 때
+/// 흔들리지 않도록 별도 엔티티로 유지한다.
+model User {
+  id                  String   @id @default(uuid())
+  googleSubId         String   @unique @map("google_sub_id")
+  googleEmail         String   @map("google_email")
+  masterPasswordHash  String   @map("master_password_hash")
+  masterKdfSalt       String   @map("master_kdf_salt")
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  accounts             Account[]
+  emailAccounts        EmailAccount[]
+  notificationChannels NotificationChannel[]
+  activityLogs         ActivityLog[]
+  trustedDevices       TrustedDevice[]
+
+  @@map("users")
+}
+
+/// 생체인증(지문/Face ID 등)으로 빠른 잠금해제를 등록한 기기.
+/// 실제 감싸진 암호화 키는 서버가 아니라 해당 기기 로컬에만 저장한다 (기술설계서 2.2).
+/// counter는 WebAuthn signature counter — 인증 성공마다 갱신하고, 서버가 들고 있는 값보다
+/// 작은 값이 오면 복제된 인증기(clone) 의심으로 거부한다 (재생 공격 방지, 구현 중 추가).
+model TrustedDevice {
+  id                   String    @id @default(uuid())
+  userId               String    @map("user_id")
+  deviceLabel          String    @map("device_label")
+  webauthnCredentialId String    @unique @map("webauthn_credential_id")
+  webauthnPublicKey    String    @map("webauthn_public_key")
+  counter              Int       @default(0)
+  createdAt            DateTime  @default(now()) @map("created_at")
+  lastUsedAt           DateTime? @map("last_used_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("trusted_devices")
+}
+
+/// 등록된 사이트/앱 계정. (userId, urlOrAppName, loginId) 조합은 유일해야 한다 —
+/// 완전히 같은 사이트+아이디 중복 등록은 막되, 아이디가 다른 부계정은 자유롭게 등록 가능 (기획서 3.2).
+model Account {
+  id               String   @id @default(uuid())
+  userId           String   @map("user_id")
+  serviceName      String   @map("service_name")
+  urlOrAppName     String   @map("url_or_app_name")
+  category         String
+  loginId          String   @map("login_id")
+  encryptedPassword String  @map("encrypted_password")
+  customFields     Json?    @map("custom_fields")
+  memo             String?
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, urlOrAppName, loginId])
+  @@map("accounts")
+}
+
+/// 연결된 메일 계정. providerType은 현재 "gmail"만 쓰지만 값 추가로 확장 가능 (9.1).
+/// access/refresh 토큰을 각각 별도 컬럼에 암호화해서, 갱신 시 refresh token 쪽은 건드리지 않는다.
+model EmailAccount {
+  id                    String    @id @default(uuid())
+  userId                String    @map("user_id")
+  providerType          String    @default("gmail") @map("provider_type")
+  displayName           String    @map("display_name")
+  encryptedAccessToken  String    @map("encrypted_access_token")
+  encryptedRefreshToken String    @map("encrypted_refresh_token")
+  tokenExpiresAt        DateTime? @map("token_expires_at")
+  isActive              Boolean   @default(true) @map("is_active")
+  connectedAt           DateTime  @default(now()) @map("connected_at")
+
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rules      EmailRule[]
+  candidates EmailCandidate[]
+
+  @@map("email_accounts")
+}
+
+/// 메일 규칙. 조건(EmailRuleCondition)을 1~5개까지 연결하고, 2개 이상이면
+/// logicalOperator(AND/OR)로 판정 방식을 정한다 (기획서 3.4.1).
+model EmailRule {
+  id              String          @id @default(uuid())
+  emailAccountId  String          @map("email_account_id")
+  logicalOperator LogicalOperator @default(AND) @map("logical_operator")
+  actionType      String          @map("action_type") // delete_candidate | spam_candidate | important (값 추가 가능)
+  isActive        Boolean         @default(true) @map("is_active")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  emailAccount EmailAccount        @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+  conditions   EmailRuleCondition[]
+  candidates   EmailCandidate[]
+
+  @@map("email_rules")
+}
+
+/// 규칙 하나에 붙는 조건 1개. conditionType 값 추가만으로 새 조건 종류를 계속 늘릴 수 있다 (9.2).
+model EmailRuleCondition {
+  id             String @id @default(uuid())
+  ruleId         String @map("rule_id")
+  conditionType  String @map("condition_type") // sender | subject_keyword | body_keyword | has_emoji | has_attachment
+  conditionValue Json   @map("condition_value")
+
+  rule EmailRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@map("email_rule_conditions")
+}
+
+/// 규칙에 매칭되어 대기함에 쌓인 후보 메일. emailAccountId를 ruleId와 별개로 직접 저장해
+/// 계정별 집계를 빠르게 하고, 규칙이 나중에 삭제/변경돼도 기록이 남게 한다 (이슈 5).
+model EmailCandidate {
+  id                String          @id @default(uuid())
+  ruleId            String          @map("rule_id")
+  emailAccountId    String          @map("email_account_id")
+  externalMessageId String          @map("external_message_id")
+  sender            String
+  subject           String
+  receivedAt        DateTime        @map("received_at")
+  status            CandidateStatus @default(PENDING)
+  processedAt       DateTime?       @map("processed_at")
+
+  rule         EmailRule    @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  emailAccount EmailAccount @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+
+  @@map("email_candidates")
+}
+
+/// 알림 채널 설정 목록 (현재는 in_app뿐). 후보 메일과 직접 연결하지 않고
+/// "지금 어떤 알림 방법이 켜져 있는지"만 나타낸다 (이슈 6).
+model NotificationChannel {
+  id          String  @id @default(uuid())
+  userId      String  @map("user_id")
+  channelType String  @default("in_app") @map("channel_type")
+  config      Json?
+  isActive    Boolean @default(true) @map("is_active")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_channels")
+}
+
+/// 범용 활동 로그. targetType + targetId 조합으로 어떤 엔티티든 기록 가능.
+model ActivityLog {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  targetType String   @map("target_type")
+  targetId   String   @map("target_id")
+  action     String
+  occurredAt DateTime @default(now()) @map("occurred_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, occurredAt])
+  @@map("activity_logs")
+}
