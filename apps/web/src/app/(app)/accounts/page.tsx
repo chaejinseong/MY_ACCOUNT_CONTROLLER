@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { apiFetch, ApiError } from "@/lib/api";
+import { apiFetch, getErrorMessage } from "@/lib/api";
 
 interface AccountListItem {
   id: string;
@@ -20,7 +20,7 @@ export default function AccountsPage() {
   useEffect(() => {
     apiFetch<AccountListItem[]>("/accounts")
       .then(setAccounts)
-      .catch((err) => setError(err instanceof ApiError ? err.message : "계정을 불러오지 못했습니다."));
+      .catch((err) => setError(getErrorMessage(err, "계정을 불러오지 못했습니다.")));
   }, []);
 
   return (

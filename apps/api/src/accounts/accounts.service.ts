@@ -78,4 +78,50 @@ export class AccountsService {
       throw err;
     }
   }
+
+  // password를 안 보내면 기존 암호문을 그대로 둔다 — 매번 재입력을 강요하지 않기 위함.
+  async update(
+    userId: string,
+    id: string,
+    encryptionKey: Buffer,
+    data: {
+      serviceName?: string;
+      urlOrAppName?: string;
+      category?: string;
+      loginId?: string;
+      password?: string;
+      memo?: string;
+    },
+  ) {
+    const existing = await this.prisma.account.findFirst({ where: { id, userId } });
+    if (!existing) {
+      throw new NotFoundException('계정을 찾을 수 없습니다.');
+    }
+
+    const { password, ...rest } = data;
+    try {
+      return await this.prisma.account.update({
+        where: { id },
+        data: {
+          ...rest,
+          ...(password ? { encryptedPassword: this.crypto.encrypt(password, encryptionKey) } : {}),
+        },
+      });
+    } catch (err: any) {
+      if (err.code === 'P2002') {
+        throw new ConflictException(
+          '이미 같은 사이트에 같은 아이디로 등록된 계정이 있습니다.',
+        );
+      }
+      throw err;
+    }
+  }
+
+  async remove(userId: string, id: string): Promise<void> {
+    const existing = await this.prisma.account.findFirst({ where: { id, userId } });
+    if (!existing) {
+      throw new NotFoundException('계정을 찾을 수 없습니다.');
+    }
+    await this.prisma.account.delete({ where: { id } });
+  }
 }

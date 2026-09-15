@@ -41,6 +41,25 @@ export class WebAuthnService {
         residentKey: 'required',
         userVerification: 'required',
       },
+      // PRF 확장 지원 여부를 물어본다 — apps/web이 이 결과로 "타이핑 없이 잠금해제"용
+      // 대칭키를 유도할 수 있는지 판단한다 (지원 안 하면 등록은 되지만 매번 타이핑 필요).
+      extensions: { prf: {} },
+    });
+  }
+
+  // webauthnCredentialId는 비밀이 아니다(등록/인증 때마다 브라우저가 그대로 노출하는 값) —
+  // apps/web이 이 값으로 IndexedDB에 로컬로 감싸둔 마스터 비밀번호를 찾는다.
+  async listDevices(userId: string) {
+    return this.prisma.trustedDevice.findMany({
+      where: { userId },
+      select: {
+        id: true,
+        deviceLabel: true,
+        webauthnCredentialId: true,
+        createdAt: true,
+        lastUsedAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
     });
   }
 

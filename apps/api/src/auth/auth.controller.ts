@@ -91,8 +91,12 @@ export class AuthController {
   }
 
   // --- WebAuthn: 신뢰된 기기에서 마스터 비밀번호 "타이핑"을 생략해주는 기능.
-  // 등록/인증 모두 이 기기를 대상으로 한 실제 navigator.credentials.* 호출은
-  // apps/web(아직 없음)에서 이뤄져야 한다 — 여기서는 그 왕복의 서버쪽 절반만 구현.
+
+  @Get('webauthn/devices')
+  @UseGuards(UnlockedGuard)
+  async webauthnDevices(@CurrentUserId() userId: string) {
+    return this.webAuthnService.listDevices(userId);
+  }
 
   @Post('webauthn/register-options')
   @UseGuards(UnlockedGuard)
@@ -129,9 +133,9 @@ export class AuthController {
   }
 
   // 생체인증 성공 = "타이핑을 생략"했을 뿐, 마스터 비밀번호 자체는 여전히 서버가 검증한다
-  // (기획서 7장 원칙 유지). password는 신뢰된 기기 로컬에 감싸둔 값을 그 기기가 생체인증
-  // 통과 직후 알아서 복호화해 보내주는 것을 전제로 한다 — 그 client-side 로직은 apps/web
-  // 몫이라 아직 없다.
+  // (기획서 7장 원칙 유지). password는 apps/web이 WebAuthn PRF 확장으로 유도한 키로
+  // 기기 로컬(IndexedDB)에 감싸둔 값을 생체인증 통과 직후 복호화해 보내준 것이다
+  // (apps/web/src/lib/webauthn.ts 참고) — 서버는 그 과정을 전혀 모르고 그냥 검증만 한다.
   @Post('webauthn/authenticate')
   @HttpCode(200)
   async webauthnAuthenticate(

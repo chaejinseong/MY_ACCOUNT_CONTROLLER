@@ -30,3 +30,10 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 
   return body as T;
 }
+
+// ApiError뿐 아니라 브라우저 API가 던지는 DOMException(WebAuthn 등) 같은 일반 Error도
+// 메시지를 그대로 보여준다 — ApiError만 걸러내면 원인 파악이 안 되는 뭉뚱그린 메시지만 남는다.
+export function getErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) return err.message;
+  return fallback;
+}

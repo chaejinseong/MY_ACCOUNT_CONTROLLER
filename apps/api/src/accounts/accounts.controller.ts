@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { AccountsService } from './accounts.service';
 import { UnlockedGuard } from '../auth/guards/unlocked.guard';
 import { CurrentUserId } from '../auth/decorators/current-user-id.decorator';
@@ -35,5 +35,22 @@ export class AccountsController {
     @Body() body: any,
   ) {
     return this.accountsService.create(userId, encryptionKey, body);
+  }
+
+  @Put(':id')
+  update(
+    @CurrentUserId() userId: string,
+    @Param('id') id: string,
+    @EncryptionKey() encryptionKey: Buffer,
+    @Body() body: any,
+  ) {
+    return this.accountsService.update(userId, id, encryptionKey, body);
+  }
+
+  @Delete(':id')
+  @HttpCode(200)
+  async remove(@CurrentUserId() userId: string, @Param('id') id: string) {
+    await this.accountsService.remove(userId, id);
+    return { removed: true };
   }
 }

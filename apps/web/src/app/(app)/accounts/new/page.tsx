@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent, type ReactNode } from "react";
-import { apiFetch, ApiError } from "@/lib/api";
+import { apiFetch, getErrorMessage } from "@/lib/api";
 
 export default function NewAccountPage() {
   const router = useRouter();
@@ -29,7 +29,7 @@ export default function NewAccountPage() {
       });
       router.push("/accounts");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "계정을 저장하지 못했습니다.");
+      setError(getErrorMessage(err, "계정을 저장하지 못했습니다."));
     } finally {
       setSubmitting(false);
     }

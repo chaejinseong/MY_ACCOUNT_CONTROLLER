@@ -8,6 +8,7 @@ declare module 'express-session' {
     userId?: string;
     unlocked?: boolean;
     oauthState?: string;
+    gmailOAuthState?: string;
     pendingGoogle?: {
       sub: string;
       email: string;

@@ -151,6 +151,8 @@ model EmailCandidate {
   rule         EmailRule    @relation(fields: [ruleId], references: [id], onDelete: Cascade)
   emailAccount EmailAccount @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
 
+  // 같은 메일이 재스캔마다 중복 후보로 쌓이지 않게 막는다 (구현 중 추가).
+  @@unique([ruleId, externalMessageId])
   @@map("email_candidates")
 }
 

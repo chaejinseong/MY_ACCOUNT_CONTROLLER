@@ -199,45 +199,41 @@ CORS를 열어야 하고(`main.ts`의 `FRONTEND_ORIGIN` env 참고), 프론트�
 
 ### 3.3 메일 계정 연결 (EmailAccount)
 
-**구현 메모 (2026-09-14)**: Gmail 토큰(access/refresh) 암호화는 계정 비밀번호와 **동일하게
-세션의 마스터 비밀번호 유도 키**를 쓴다(옵션 b 채택 — 아래 "메일 스캔은 왜 자동이 아닌가"
-참고). `provider` 쿼리는 현재 gmail 하나뿐이라 생략, 향후 provider가 늘면 추가.
-
 | Method | Endpoint | 설명 |
 |---|---|---|
 | GET | `/email-accounts` | 연결된 메일 계정 목록 |
-| GET | `/email-accounts/oauth/start` | Gmail OAuth 인증 시작 URL 반환 (`gmail.modify` 스코프, 잠금 해제된 세션에서만 호출 가능) |
-| GET | `/email-accounts/oauth/callback` | OAuth 콜백 처리 — Google이 직접 리다이렉트하는 요청이라 가드 대신 세션을 수동 검증하고, 성공/실패와 무관하게 `/mail/rules`로 302 리다이렉트 |
+| GET | `/email-accounts/oauth/start?provider=gmail` | Gmail OAuth 인증 시작 URL 반환 |
+| GET | `/email-accounts/oauth/callback` | OAuth 콜백 처리, 토큰 저장 |
 | DELETE | `/email-accounts/:id` | 메일 계정 연결 해제 |
 
 ### 3.4 메일 규칙 (EmailRule)
-
-**구현 메모**: 조회/생성만 구현됨. 수정/삭제(`GET/PUT/DELETE /email-rules/:id`)는 아직
-없음 — 필요해지면 `AccountsController`의 PUT/DELETE 패턴을 그대로 따라가면 된다.
 
 | Method | Endpoint | 설명 |
 |---|---|---|
 | GET | `/email-rules?emailAccountId=` | 규칙 목록 조회 (연결된 조건들 포함) |
 | POST | `/email-rules` | 규칙 등록 — body에 `conditions`(1~5개 배열), `logicalOperator`(조건 2개 이상일 때 필수), `actionType` 포함 |
+| GET | `/email-rules/:id` | 규칙 상세 조회 (조건 목록 포함) |
+| PUT | `/email-rules/:id` | 규칙 수정 (조건 배열 통째로 교체) |
+| DELETE | `/email-rules/:id` | 규칙 삭제 (연결된 조건도 함께 삭제) |
 
 ### 3.5 메일 후보 / 승인 플로우 (EmailCandidate)
 
-**구현 메모**: "메일 스캔은 왜 자동이 아닌가" — EmailAccount 토큰이 마스터 비밀번호
-유도 키로 암호화돼 있어서, 그 키는 사용자가 잠금 해제된 세션을 갖고 있을 때만 서버
-메모리에 존재한다(`UnlockKeyStoreService`). 따라서 사용자가 화면을 안 열어둔 동안 도는
-크론 기반 자동 스캔은 이 구조에서 근본적으로 불가능하다 — 대신 `POST
-/email-candidates/scan`을 사용자가 "지금 스캔" 버튼으로 직접 트리거하는 방식으로
-구현했다. `@nestjs/schedule` 기반 자동 스캔이 꼭 필요해지면, 토큰만 서버가 관리하는
-별도 키로 암호화하는 재설계가 먼저 필요하다(그 경우 이 토큰은 DB 유출 시 노출되므로
-트레이드오프를 다시 판단해야 함).
+| Method | Endpoint | 설명 |
+|---|---|---|
+| GET | `/email-candidates?status=pending` | 대기 중인 후보 메일 목록 (오늘의 검토함) |
+| POST | `/email-candidates/:id/approve` | 개별 승인 → 실제 Gmail 삭제/스팸 처리 실행 |
+| POST | `/email-candidates/:id/exclude` | 개별 제외 (처리하지 않음) |
+| POST | `/email-candidates/approve-all` | 전체 승인 (필터 조건 지정 가능) |
+| POST | `/scan/trigger` | 수동으로 메일 스캔 즉시 실행 (자동 크론과 별개) |
+
+### 3.6 알림 (NotificationChannel / Important Mail)
 
 | Method | Endpoint | 설명 |
 |---|---|---|
-| GET | `/email-candidates` | 대기 중인(`PENDING`) 후보 메일 목록 (오늘의 검토함) |
-| POST | `/email-candidates/scan` | 연결된 모든 활성 메일 계정 × 활성 규칙으로 지금 스캔 실행, 새로 매칭된 메일을 후보로 적재 (사용자가 직접 트리거) |
-| GET | `/email-candidates/important-summary` | `actionType=important`로 승인된 후보를 메일 계정별로 집계 (`/mail/important` 화면용) |
-| POST | `/email-candidates/:id/approve` | 개별 승인 → `actionType`이 delete/spam이면 실제 Gmail 삭제(휴지통)/스팸 처리까지 실행 |
-| POST | `/email-candidates/:id/exclude` | 개별 제외 (처리하지 않음) |
+| GET | `/notifications/summary` | 마지막 확인 이후 쌓인 중요 메일을 `EmailAccount`별로 묶은 개수 요약 (대시보드용) |
+| GET | `/notifications?type=important` | 중요 메일 알림함 목록 (상세) |
+| GET | `/notification-channels` | 알림 채널 설정 목록 |
+| PUT | `/notification-channels/:id` | 알림 채널 설정 변경 |
 
 ### 3.7 설정 / 로그
 
@@ -310,18 +306,8 @@ account-manager/
       webauthn*.ts` + `CLAUDE.md` 참고. PRF 미지원 브라우저/기기는 등록은 되지만 자동
       비밀번호 입력 없이 계속 타이핑 필요(degraded mode).
 - [x] 마스터 비밀번호 → 암호화 키 유도 로직 프로토타입 (Argon2id + AES-256-GCM) — `apps/api/src/common/crypto/` (`kdf.util.ts`, `aes.util.ts`, `CryptoService`).
-- [x] 마스터 비밀번호 복구 수단 정책 확정 (2026-09-14 초안 → 2026-09-15 사용자 확인, 7.1 참고:
-      옵션 B+C 채택 — 복구 없음 정책 + WebAuthn 완충). 최초 설정 화면의 경고/체크박스 UI도
-      구현 완료(`apps/web/src/app/login/page.tsx`, `step=setup`일 때 노출).
-- [x] Gmail 토큰 암호화 키 정책 확정 (2026-09-14 초안 → 2026-09-15 사용자 확인, 7.2 참고:
-      서버 관리 키 채택). `GMAIL_TOKEN_ENCRYPTION_KEY` 환경변수 + `GmailTokenKeyService`
-      (`apps/api/src/common/crypto/gmail-token-key.service.ts`) 구현 완료 — 기존 옵션 (b)
-      구현(세션의 마스터 비밀번호 유도 키)을 이걸로 교체. `EmailAccountsController`/
-      `CandidatesController`의 Gmail 관련 라우트는 더 이상 `@EncryptionKey()`가 필요 없어져
-      `oauth/start`·`GET/DELETE /email-accounts`는 `UnlockedGuard`→`LoggedInGuard`로 완화됨
-      (`email-candidates/*`는 후보 메일에 발신자/제목이 드러나는 정책적 이유로 `UnlockedGuard`
-      유지 — `candidates.controller.ts` 주석 참고). 전환 이전에 이미 연결돼 있던 계정은 구
-      키로 암호화된 토큰이 남아있어 일회성 재암호화 마이그레이션이 필요했음(`CLAUDE.md` 참고).
+- [x] 마스터 비밀번호 복구 수단 정책 결정 (2026-09-14, 7.1 참고: 옵션 B+C 채택 — 복구 없음 정책 + WebAuthn 완충) — 단, 최초 설정 화면의 경고/체크박스 UI는 아직 미구현.
+- [x] Gmail 토큰 암호화 키 정책 결정 (2026-09-14, 7.2 참고: 서버 관리 키 채택) — `GMAIL_TOKEN_ENCRYPTION_KEY` 환경변수 도입 및 `common/crypto` 연동은 아직 미구현.
 - [x] Next.js 프로젝트 스캐폴딩 및 4장 라우트 뼈대 생성 (2026-09-14, App Router + Tailwind v4).
       `/login`·`/accounts`·`/accounts/new`·`/accounts/[id]`는 실제 백엔드 연동까지 구현,
       `/mail/*`·`/settings`는 대응 백엔드가 아직 없어 placeholder. 인증 가드는 현재
