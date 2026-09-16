@@ -62,6 +62,7 @@ function MailRulesContent() {
   const [rulesByAccount, setRulesByAccount] = useState<Record<string, EmailRuleItem[]>>({});
   const [error, setError] = useState<string | null>(connectError);
   const [connecting, setConnecting] = useState(false);
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
 
   function loadAccounts() {
     apiFetch<EmailAccountItem[]>("/email-accounts")
@@ -105,6 +106,15 @@ function MailRulesContent() {
     }
   }
 
+  async function handleDeleteRule(rule: EmailRuleItem) {
+    if (!confirm("이 규칙을 삭제할까요? 이 규칙으로 쌓인 후보 메일 기록도 함께 삭제됩니다.")) return;
+    try {
+      await apiFetch(`/email-rules/${rule.id}`, { method: "DELETE" });
+      loadRules(rule.emailAccountId);
+    } catch (err) {
+      setError(getErrorMessage(err, "규칙 삭제에 실패했습니다."));
+    }
+  }
 
   return (
     <div className="max-w-2xl space-y-6">
@@ -146,30 +156,69 @@ function MailRulesContent() {
           </div>
 
           <ul className="space-y-1">
-            {(rulesByAccount[account.id] ?? []).map((rule) => (
-              <li key={rule.id} className="rounded bg-neutral-100 px-3 py-2 text-sm dark:bg-neutral-900">
-                <span className="font-medium">{actionLabel(rule.actionType)}</span>
-                {" — "}
-                {rule.conditions.map(conditionSummary).join(rule.conditions.length > 1 ? ` ${rule.logicalOperator} ` : "")}
-              </li>
-            ))}
+            {(rulesByAccount[account.id] ?? []).map((rule) =>
+              editingRuleId === rule.id ? (
+                <li key={rule.id} className="rounded bg-neutral-100 p-3 dark:bg-neutral-900">
+                  <RuleForm
+                    emailAccountId={account.id}
+                    initialRule={rule}
+                    onSaved={() => {
+                      setEditingRuleId(null);
+                      loadRules(account.id);
+                    }}
+                    onCancel={() => setEditingRuleId(null)}
+                  />
+                </li>
+              ) : (
+                <li
+                  key={rule.id}
+                  className="flex items-center justify-between gap-2 rounded bg-neutral-100 px-3 py-2 text-sm dark:bg-neutral-900"
+                >
+                  <span>
+                    <span className="font-medium">{actionLabel(rule.actionType)}</span>
+                    {" — "}
+                    {rule.conditions
+                      .map(conditionSummary)
+                      .join(rule.conditions.length > 1 ? ` ${rule.logicalOperator} ` : "")}
+                  </span>
+                  <span className="flex shrink-0 gap-2 text-xs">
+                    <button type="button" onClick={() => setEditingRuleId(rule.id)} className="text-neutral-500 hover:underline">
+                      수정
+                    </button>
+                    <button type="button" onClick={() => handleDeleteRule(rule)} className="text-red-600 hover:underline">
+                      삭제
+                    </button>
+                  </span>
+                </li>
+              ),
+            )}
             {(rulesByAccount[account.id] ?? []).length === 0 && (
               <li className="text-sm text-neutral-500">등록된 규칙이 없습니다.</li>
             )}
           </ul>
 
-          <NewRuleForm
-            emailAccountId={account.id}
-            onCreated={() => loadRules(account.id)}
-          />
+          <RuleForm emailAccountId={account.id} onSaved={() => loadRules(account.id)} />
         </section>
       ))}
     </div>
   );
 }
 
-function NewRuleForm({ emailAccountId, onCreated }: { emailAccountId: string; onCreated: () => void }) {
-  const [conditions, setConditions] = useState<RuleCondition[]>([{ conditionType: "sender", conditionValue: {} }]);
+function RuleForm({
+  emailAccountId,
+  initialRule,
+  onSaved,
+  onCancel,
+}: {
+  emailAccountId: string;
+  initialRule?: EmailRuleItem;
+  onSaved: () => void;
+  onCancel?: () => void;
+}) {
+  const isEditing = !!initialRule;
+  const [conditions, setConditions] = useState<RuleCondition[]>(
+    initialRule?.conditions ?? [{ conditionType: "sender", conditionValue: {} }],
+  );
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -186,25 +235,32 @@ function NewRuleForm({ emailAccountId, onCreated }: { emailAccountId: string; on
     setConditions((prev) => prev.filter((_, i) => i !== index));
   }
 
+  function conditionValueDefault(condition: RuleCondition): string {
+    return (condition.conditionValue.domain ?? condition.conditionValue.contains ?? "") as string;
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
     setSubmitting(true);
 
     const form = new FormData(event.currentTarget);
+    const payload = {
+      emailAccountId,
+      actionType: form.get("actionType"),
+      logicalOperator: form.get("logicalOperator") ?? "AND",
+      conditions,
+    };
+
     try {
-      await apiFetch("/email-rules", {
-        method: "POST",
-        body: JSON.stringify({
-          emailAccountId,
-          actionType: form.get("actionType"),
-          logicalOperator: form.get("logicalOperator") ?? "AND",
-          conditions,
-        }),
-      });
-      setConditions([{ conditionType: "sender", conditionValue: {} }]);
-      (event.target as HTMLFormElement).reset();
-      onCreated();
+      if (isEditing) {
+        await apiFetch(`/email-rules/${initialRule.id}`, { method: "PUT", body: JSON.stringify(payload) });
+      } else {
+        await apiFetch("/email-rules", { method: "POST", body: JSON.stringify(payload) });
+        setConditions([{ conditionType: "sender", conditionValue: {} }]);
+        (event.target as HTMLFormElement).reset();
+      }
+      onSaved();
     } catch (err) {
       setError(getErrorMessage(err, "규칙을 저장하지 못했습니다."));
     } finally {
@@ -213,9 +269,13 @@ function NewRuleForm({ emailAccountId, onCreated }: { emailAccountId: string; on
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-2 border-t border-neutral-200 pt-3 dark:border-neutral-800">
+    <form onSubmit={handleSubmit} className={isEditing ? "space-y-2" : "space-y-2 border-t border-neutral-200 pt-3 dark:border-neutral-800"}>
       <div className="flex gap-2">
-        <select name="actionType" className="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900">
+        <select
+          name="actionType"
+          defaultValue={initialRule?.actionType}
+          className="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+        >
           {ACTION_TYPES.map((a) => (
             <option key={a.value} value={a.value}>
               {a.label}
@@ -223,7 +283,11 @@ function NewRuleForm({ emailAccountId, onCreated }: { emailAccountId: string; on
           ))}
         </select>
         {conditions.length > 1 && (
-          <select name="logicalOperator" className="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900">
+          <select
+            name="logicalOperator"
+            defaultValue={initialRule?.logicalOperator}
+            className="rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+          >
             <option value="AND">AND (모두 만족)</option>
             <option value="OR">OR (하나만 만족)</option>
           </select>
@@ -248,6 +312,7 @@ function NewRuleForm({ emailAccountId, onCreated }: { emailAccountId: string; on
             <input
               type="text"
               placeholder="도메인 (예: coupang.com)"
+              defaultValue={conditionValueDefault(condition)}
               onChange={(e) => updateCondition(index, { conditionValue: { domain: e.target.value } })}
               className="flex-1 rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900"
             />
@@ -255,6 +320,7 @@ function NewRuleForm({ emailAccountId, onCreated }: { emailAccountId: string; on
             <input
               type="text"
               placeholder="포함할 단어"
+              defaultValue={conditionValueDefault(condition)}
               onChange={(e) => updateCondition(index, { conditionValue: { contains: e.target.value } })}
               className="flex-1 rounded border border-neutral-300 px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900"
             />
@@ -281,8 +347,13 @@ function NewRuleForm({ emailAccountId, onCreated }: { emailAccountId: string; on
           disabled={submitting}
           className="rounded border border-neutral-300 px-3 py-1 text-xs disabled:opacity-50 dark:border-neutral-700"
         >
-          {submitting ? "저장 중..." : "규칙 추가"}
+          {submitting ? "저장 중..." : isEditing ? "수정 저장" : "규칙 추가"}
         </button>
+        {isEditing && (
+          <button type="button" onClick={onCancel} className="text-xs text-neutral-500 hover:underline">
+            취소
+          </button>
+        )}
       </div>
 
       {error && <p className="text-xs text-red-600">{error}</p>}

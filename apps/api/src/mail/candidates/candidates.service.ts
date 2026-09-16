@@ -1,10 +1,12 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { MailProviderRegistryService } from '../providers/mail-provider-registry.service';
 import { messageMatchesRule } from '../rules/rule-matcher.util';
 
 @Injectable()
 export class CandidatesService {
+  private readonly logger = new Logger(CandidatesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly providerRegistry: MailProviderRegistryService,
@@ -39,53 +41,66 @@ export class CandidatesService {
     }));
   }
 
-  // Gmail 토큰은 서버 관리 키로 복호화되므로(mail-provider.interface.ts 참고) 기술적으로는
-  // 세션 잠금 없이도 스캔할 수 있다. 다만 후보 메일의 발신자/제목이 드러나는 화면이라
-  // 컨트롤러는 여전히 UnlockedGuard로 로그인+잠금해제를 요구한다(RulesController와 동일한
-  // 정책 — email-candidates.controller.ts 참고). 사용자가 화면에서 "지금 스캔"을 눌렀을
-  // 때만 도는 구조이고, 완전 자동 백그라운드 스캔은 아직 별도 배선이 필요하다.
+  // 사용자가 화면에서 "지금 스캔"을 눌렀을 때 호출 — 그 사용자 소유 계정만 대상으로 한다.
   async scan(userId: string) {
-    const accounts = await this.prisma.emailAccount.findMany({ where: { userId, isActive: true } });
+    return this.scanAccounts(await this.prisma.emailAccount.findMany({ where: { userId, isActive: true } }));
+  }
 
+  // ScanSchedulerService(@Cron)가 주기적으로 호출 — 모든 사용자의 활성 계정을 대상으로 한다.
+  // Gmail 토큰이 서버 관리 키로 복호화되므로(mail-provider.interface.ts 참고) 세션 잠금 상태와
+  // 무관하게 항상 돌 수 있다 — 옵션 (a)로 전환하면서 없앤 기술적 걸림돌(기획서 3.4.2).
+  async scanAll() {
+    return this.scanAccounts(await this.prisma.emailAccount.findMany({ where: { isActive: true } }));
+  }
+
+  // 계정 하나가 실패(토큰 만료, Gmail API 일시 오류 등)해도 나머지 계정 스캔은 계속 진행한다 —
+  // scanAll()이 사용자 감시 없이 도는 크론 작업이라 한 계정의 오류가 전체를 막으면 안 된다.
+  private async scanAccounts(accounts: { id: string; providerType: string }[]) {
     let scannedAccounts = 0;
     let createdCandidates = 0;
+    let failedAccounts = 0;
 
     for (const account of accounts) {
-      const provider = this.providerRegistry.get(account.providerType);
-      const rules = await this.prisma.emailRule.findMany({
-        where: { emailAccountId: account.id, isActive: true },
-        include: { conditions: true },
-      });
-      if (rules.length === 0) continue;
+      try {
+        const provider = this.providerRegistry.get(account.providerType);
+        const rules = await this.prisma.emailRule.findMany({
+          where: { emailAccountId: account.id, isActive: true },
+          include: { conditions: true },
+        });
+        if (rules.length === 0) continue;
 
-      const messages = await provider.listCandidateMessages(account.id);
-      scannedAccounts++;
+        const messages = await provider.listCandidateMessages(account.id);
+        scannedAccounts++;
 
-      for (const message of messages) {
-        for (const rule of rules) {
-          if (!messageMatchesRule(message, rule)) continue;
+        for (const message of messages) {
+          for (const rule of rules) {
+            if (!messageMatchesRule(message, rule)) continue;
 
-          try {
-            await this.prisma.emailCandidate.create({
-              data: {
-                ruleId: rule.id,
-                emailAccountId: account.id,
-                externalMessageId: message.externalMessageId,
-                sender: message.sender,
-                subject: message.subject,
-                receivedAt: message.receivedAt,
-              },
-            });
-            createdCandidates++;
-          } catch (err: any) {
-            // 이미 같은 (rule, message) 조합으로 쌓인 후보면 건너뛴다(재스캔 시 중복 방지).
-            if (err.code !== 'P2002') throw err;
+            try {
+              await this.prisma.emailCandidate.create({
+                data: {
+                  ruleId: rule.id,
+                  emailAccountId: account.id,
+                  externalMessageId: message.externalMessageId,
+                  sender: message.sender,
+                  subject: message.subject,
+                  receivedAt: message.receivedAt,
+                },
+              });
+              createdCandidates++;
+            } catch (err: any) {
+              // 이미 같은 (rule, message) 조합으로 쌓인 후보면 건너뛴다(재스캔 시 중복 방지).
+              if (err.code !== 'P2002') throw err;
+            }
           }
         }
+      } catch (err: any) {
+        failedAccounts++;
+        this.logger.error(`메일 계정 스캔 실패 (emailAccountId=${account.id}): ${err.message}`, err.stack);
       }
     }
 
-    return { scannedAccounts, createdCandidates };
+    return { scannedAccounts, createdCandidates, failedAccounts };
   }
 
   // action_type이 delete_candidate/spam_candidate면 실제로 Gmail에도 반영한다.

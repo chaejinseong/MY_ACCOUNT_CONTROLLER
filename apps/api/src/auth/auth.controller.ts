@@ -59,6 +59,19 @@ export class AuthController {
     return this.authService.setupMasterPassword(req.session, password);
   }
 
+  @Post('master-password/change')
+  @UseGuards(UnlockedGuard)
+  @HttpCode(200)
+  async changeMasterPassword(
+    @Body('currentPassword') currentPassword: string,
+    @Body('newPassword') newPassword: string,
+    @Req() req: Request,
+    @CurrentUserId() userId: string,
+  ) {
+    const result = await this.authService.changeMasterPassword(req.session, userId, currentPassword, newPassword);
+    return { changed: true, ...result };
+  }
+
   @Post('unlock')
   @UseGuards(LoggedInGuard)
   @HttpCode(200)
@@ -87,7 +100,23 @@ export class AuthController {
   @Get('me')
   @UseGuards(LoggedInGuard)
   me(@Req() req: Request) {
-    return { userId: req.session.userId, unlocked: !!req.session.unlocked };
+    // idle 타임아웃(자동 잠금)을 화면 전환(proxy.ts의 /auth/me 호출) 시점에도 반영한다.
+    const unlocked = this.authService.checkStillUnlocked(req.session);
+    return { userId: req.session.userId, unlocked };
+  }
+
+  @Get('settings')
+  @UseGuards(LoggedInGuard)
+  async settings(@CurrentUserId() userId: string) {
+    return this.authService.getSettings(userId);
+  }
+
+  @Post('settings/auto-lock-minutes')
+  @UseGuards(UnlockedGuard)
+  @HttpCode(200)
+  async updateAutoLockMinutes(@Body('autoLockMinutes') autoLockMinutes: number, @Req() req: Request, @CurrentUserId() userId: string) {
+    await this.authService.updateAutoLockMinutes(req.session, userId, autoLockMinutes);
+    return { autoLockMinutes };
   }
 
   // --- WebAuthn: 신뢰된 기기에서 마스터 비밀번호 "타이핑"을 생략해주는 기능.

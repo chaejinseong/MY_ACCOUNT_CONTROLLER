@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { RulesService } from './rules.service';
 import { UnlockedGuard } from '../../auth/guards/unlocked.guard';
 import { CurrentUserId } from '../../auth/decorators/current-user-id.decorator';
@@ -18,5 +18,17 @@ export class RulesController {
   @Post()
   create(@CurrentUserId() userId: string, @Body() body: any) {
     return this.rulesService.create(userId, body);
+  }
+
+  @Put(':id')
+  update(@CurrentUserId() userId: string, @Param('id') id: string, @Body() body: any) {
+    return this.rulesService.update(userId, id, body);
+  }
+
+  @Delete(':id')
+  @HttpCode(200)
+  async remove(@CurrentUserId() userId: string, @Param('id') id: string) {
+    await this.rulesService.remove(userId, id);
+    return { removed: true };
   }
 }

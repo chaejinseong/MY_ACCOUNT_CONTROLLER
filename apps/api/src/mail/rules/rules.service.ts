@@ -43,4 +43,48 @@ export class RulesService {
       include: { conditions: true },
     });
   }
+
+  // conditions를 넘기면 기존 조건을 전부 지우고 새로 만든다(부분 patch가 아니라 통째로 교체) —
+  // create()와 동일한 1~5개 제약은 프론트엔드에서 강제한다.
+  async update(
+    userId: string,
+    id: string,
+    data: {
+      logicalOperator?: 'AND' | 'OR';
+      actionType?: string;
+      isActive?: boolean;
+      conditions?: { conditionType: string; conditionValue: any }[];
+    },
+  ) {
+    const rule = await this.prisma.emailRule.findFirst({ where: { id, emailAccount: { userId } } });
+    if (!rule) {
+      throw new NotFoundException('규칙을 찾을 수 없습니다.');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      if (data.conditions) {
+        await tx.emailRuleCondition.deleteMany({ where: { ruleId: id } });
+      }
+      return tx.emailRule.update({
+        where: { id },
+        data: {
+          ...(data.logicalOperator ? { logicalOperator: data.logicalOperator } : {}),
+          ...(data.actionType ? { actionType: data.actionType } : {}),
+          ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+          ...(data.conditions ? { conditions: { create: data.conditions } } : {}),
+        },
+        include: { conditions: true },
+      });
+    });
+  }
+
+  // 규칙 삭제는 연결된 EmailCandidate 기록도 함께 지운다(스키마의 onDelete: Cascade) —
+  // AccountsController의 계정 연동 해제와 동일한 정책(rules.controller.ts 참고).
+  async remove(userId: string, id: string): Promise<void> {
+    const rule = await this.prisma.emailRule.findFirst({ where: { id, emailAccount: { userId } } });
+    if (!rule) {
+      throw new NotFoundException('규칙을 찾을 수 없습니다.');
+    }
+    await this.prisma.emailRule.delete({ where: { id } });
+  }
 }

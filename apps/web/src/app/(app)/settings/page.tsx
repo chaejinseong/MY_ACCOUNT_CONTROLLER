@@ -76,10 +76,12 @@ export default function SettingsPage() {
     <div className="max-w-md space-y-8">
       <div className="space-y-2">
         <h1 className="text-xl font-semibold">설정</h1>
-        <p className="text-sm text-neutral-500">
-          마스터 비밀번호 변경, 자동 잠금 시간, 백업/복구 설정은 준비 중입니다.
-        </p>
+        <p className="text-sm text-neutral-500">백업/복구 설정은 준비 중입니다.</p>
       </div>
+
+      <AutoLockSection />
+
+      <ChangeMasterPasswordSection onChanged={loadDevices} />
 
       <section className="space-y-3">
         <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">
@@ -154,5 +156,153 @@ export default function SettingsPage() {
         {error && <p className="text-sm text-red-600">{error}</p>}
       </section>
     </div>
+  );
+}
+
+function AutoLockSection() {
+  const [autoLockMinutes, setAutoLockMinutes] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiFetch<{ autoLockMinutes: number }>("/auth/settings")
+      .then((data) => setAutoLockMinutes(data.autoLockMinutes))
+      .catch((err) => setError(getErrorMessage(err, "설정을 불러오지 못했습니다.")));
+  }, []);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (autoLockMinutes == null) return;
+    setError(null);
+    setInfo(null);
+    setSaving(true);
+    try {
+      await apiFetch("/auth/settings/auto-lock-minutes", {
+        method: "POST",
+        body: JSON.stringify({ autoLockMinutes }),
+      });
+      setInfo("자동 잠금 시간을 저장했습니다.");
+    } catch (err) {
+      setError(getErrorMessage(err, "자동 잠금 시간을 저장하지 못했습니다."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="space-y-3">
+      <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">자동 잠금</h2>
+      <p className="text-xs text-neutral-500">
+        이 시간 동안 앱을 사용하지 않으면 자동으로 잠깁니다. 다시 열람하려면 마스터 비밀번호(또는 등록된 기기의
+        생체인증)로 잠금을 해제해야 합니다.
+      </p>
+      <form onSubmit={handleSubmit} className="flex items-center gap-2">
+        <input
+          type="number"
+          min={1}
+          max={240}
+          value={autoLockMinutes ?? ""}
+          onChange={(e) => setAutoLockMinutes(Number(e.target.value))}
+          disabled={autoLockMinutes == null}
+          className="w-24 rounded border border-neutral-300 px-3 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+        />
+        <span className="text-sm text-neutral-500">분</span>
+        <button
+          type="submit"
+          disabled={saving || autoLockMinutes == null}
+          className="rounded border border-neutral-300 px-3 py-1.5 text-sm disabled:opacity-50 dark:border-neutral-700"
+        >
+          {saving ? "저장 중..." : "저장"}
+        </button>
+      </form>
+      {info && <p className="text-sm text-green-700 dark:text-green-500">{info}</p>}
+      {error && <p className="text-sm text-red-600">{error}</p>}
+    </section>
+  );
+}
+
+function ChangeMasterPasswordSection({ onChanged }: { onChanged: () => void }) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+    setInfo(null);
+
+    const form = new FormData(event.currentTarget);
+    const currentPassword = form.get("currentPassword") as string;
+    const newPassword = form.get("newPassword") as string;
+    const confirmPassword = form.get("confirmPassword") as string;
+
+    if (newPassword !== confirmPassword) {
+      setError("새 비밀번호가 서로 일치하지 않습니다.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const result = await apiFetch<{ changed: true; revokedDevices: number }>("/auth/master-password/change", {
+        method: "POST",
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      setInfo(
+        result.revokedDevices > 0
+          ? `마스터 비밀번호를 변경했습니다. 등록돼 있던 생체인증 기기 ${result.revokedDevices}개가 모두 해제되었으니, 필요하면 아래에서 새 비밀번호로 다시 등록하세요.`
+          : "마스터 비밀번호를 변경했습니다.",
+      );
+      (event.target as HTMLFormElement).reset();
+      onChanged();
+    } catch (err) {
+      setError(getErrorMessage(err, "마스터 비밀번호를 변경하지 못했습니다."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="space-y-3">
+      <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">마스터 비밀번호 변경</h2>
+      <p className="text-xs text-neutral-500">
+        변경하면 저장된 모든 계정 비밀번호가 새 마스터 비밀번호로 다시 암호화됩니다. 등록된 생체인증 기기는
+        전부 해제되니 이후 다시 등록해야 합니다.
+      </p>
+      <form onSubmit={handleSubmit} className="space-y-2">
+        <input
+          name="currentPassword"
+          type="password"
+          required
+          placeholder="현재 마스터 비밀번호"
+          className="w-full rounded border border-neutral-300 px-3 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+        />
+        <input
+          name="newPassword"
+          type="password"
+          required
+          minLength={8}
+          placeholder="새 마스터 비밀번호"
+          className="w-full rounded border border-neutral-300 px-3 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+        />
+        <input
+          name="confirmPassword"
+          type="password"
+          required
+          minLength={8}
+          placeholder="새 마스터 비밀번호 확인"
+          className="w-full rounded border border-neutral-300 px-3 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+        />
+        <button
+          type="submit"
+          disabled={saving}
+          className="rounded bg-neutral-900 px-3 py-1.5 text-sm text-white disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
+        >
+          {saving ? "변경 중..." : "마스터 비밀번호 변경"}
+        </button>
+      </form>
+      {info && <p className="text-sm text-green-700 dark:text-green-500">{info}</p>}
+      {error && <p className="text-sm text-red-600">{error}</p>}
+    </section>
   );
 }

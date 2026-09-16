@@ -3,6 +3,101 @@
 이 파일은 Claude Code(터미널)가 세션 시작 시 자동으로 읽는 파일입니다.
 Cowork 채팅에서 기획~설계~초기 구현까지 진행하다 이어받는 시점의 상태를 요약합니다.
 
+## 지금 세션 일시정지 시점 (2026-09-16, 세 번째 정지 — Cowork에서 대신 작업) — 다음 세션 시작할 때 먼저 볼 것
+
+**터미널 세션을 못 쓰는 상황이라 Cowork 세션이 대신 상태를 확인/정리함.**
+
+- **설정 화면(`/settings`) 프론트엔드는 이미 완료돼 있었음** — 바로 아래 "두 번째 정지" 메모는
+  "프론트는 전혀 손 안 댐"이라고 적혀 있지만, 실제 `apps/web/src/app/(app)/settings/page.tsx`를
+  열어보니 `AutoLockSection`(자동 잠금 시간, `GET/POST /auth/settings*` 연동)과
+  `ChangeMasterPasswordSection`(마스터 비밀번호 변경, `POST /auth/master-password/change`
+  연동, 생체인증 기기 해제 안내 문구 포함)이 둘 다 이미 구현돼 있었다. 아마 두 번째 정지
+  메모를 쓴 다음에 이어서 작업하다가 문서화 전에 다시 중단된 것으로 보임 — 문서와 실제
+  코드가 어긋나 있었으니 다음에도 이런 게 있는지 `git diff`로 한 번씩 확인할 것.
+- **빌드/타입체크 확인함** (Cowork 세션에서, 브라우저 실사용 테스트는 아직 못 함):
+  - `npm run build --workspace=apps-api` (`nest build`) — 에러 0
+  - `apps/web`에서 `npx tsc --noEmit` — 에러 0
+  - `npm run build --workspace=apps-web`(`next build`)는 Cowork 작업 환경 자체의 제약으로
+    실행 불가했음 — 이 환경은 linux/arm64인데 `@next/swc-linux-arm64-gnu` 네이티브 바이너리가
+    없고, Next.js의 다운로더가 이 환경의 프록시 설정을 안 타서 `registry.npmjs.org` DNS
+    조회가 실패함(`curl`로는 프록시 통해 접속 잘 됨 — Next 다운로더만 프록시를 안 씀).
+    **이건 이 작업 환경만의 문제고, 사용자 실제 맥에서는 전혀 문제 없었던 부분**이니 신경 안
+    써도 됨. `tsc --noEmit`이 통과했으니 타입 오류는 없다.
+  - 아직 실제 브라우저로 마스터 비밀번호 변경(재암호화 확인, TrustedDevice 해제 확인)과
+    자동 스캔 수동 트리거(`POST /email-candidates/scan`) 테스트는 못 해봄 — 다음 세션에서
+    최우선으로 할 것.
+- **git 정리**: 오래된(활성 프로세스 없는, 0바이트) `.git/index.lock`이 남아있어 커밋이 막혀
+  있었음 — 삭제 권한이 없어서 `_to_delete/`로 옮기는 방식으로 치움(실제 삭제는 안 함, 사용자가
+  나중에 그 폴더 직접 정리하면 됨). 이후 위 변경사항 전부 커밋함(`git log` 참고).
+- **백업/복구(데이터 export/import) 기능**: 사용자가 "우선 추후로 남겨두자"고 확정함
+  (2026-09-15/16 Cowork 대화). 다음 세션에서 다시 물어볼 필요 없음 — 그냥 보류 상태 유지.
+- **origin에 push 안 됨** — 로컬 커밋만 있음. push 필요하면 사용자에게 먼저 확인할 것.
+
+## 지금 세션 일시정지 시점 (2026-09-15, 두 번째 정지) — 다음 세션 시작할 때 먼저 볼 것
+
+**"남은 단계도 진행해" 지시로 아래 세 가지를 작업 중이던 도중 사용자가 일시정지 요청함.
+git commit 전이라 아래 내용이 전부 working tree에만 있음 (`git status`로 확인).**
+
+- [x] **EmailRule 수정/삭제** — 완료. `apps/api/src/mail/rules/{rules.controller.ts,rules.service.ts}`에
+  `PUT/DELETE /email-rules/:id` 추가, `apps/web/.../mail/rules/page.tsx`의 `NewRuleForm`을
+  `RuleForm`으로 일반화해 규칙 목록에 수정/삭제 버튼 연결. 빌드만 확인, 브라우저 실사용
+  테스트는 아직 안 함.
+- [x] **자동(백그라운드) 메일 스캔 스케줄러** — 완료. `@nestjs/schedule` 설치,
+  `apps/api/src/mail/candidates/scan-scheduler.service.ts`(신규) — `@Cron(EVERY_3_HOURS)`로
+  `CandidatesService.scanAll()`(신규, 사용자 필터 없이 모든 활성 계정 대상) 호출.
+  `AppModule`에 `ScheduleModule.forRoot()` 등록. `scanAccounts()` 내부에 계정 단위
+  try/catch 추가(한 계정 실패가 전체를 막지 않도록, 사람이 지켜보지 않는 크론이라).
+  **아직 실제로 3시간을 기다려 동작을 확인하지는 못함** — 로직 리뷰 + 빌드만 확인.
+- [~] **설정 화면 (마스터 비밀번호 변경 / 자동 잠금 시간)** — **백엔드만 완료, 프론트는 전혀
+  손 안 댐.** 다음 세션에서 여기부터 이어가면 됨:
+  - DB: `User.autoLockMinutes`(기본 15분) 컬럼 추가 완료 — psql로 직접 `ALTER TABLE` 실행 →
+    `prisma/migrations/20260915174804_add_auto_lock_minutes/migration.sql` 수동 작성 →
+    `prisma migrate resolve --applied` → `prisma generate`까지 끝냄 (기존에 문서화된 drift
+    우회 절차 그대로 따름, `npx prisma migrate status`로 drift 없음 확인함).
+  - `UnlockKeyStoreService`를 `Map<string, Buffer>`에서 `Map<string, {key, autoLockMinutes,
+    lastActivityAt}>`로 리팩터링, `touch(sessionId)`가 idle 타임아웃을 매 호출마다 검사/갱신
+    (자동 잠금 실제 구현 지점). `UnlockedGuard`가 `get()` 대신 `touch()`를 쓰도록 교체,
+    타임아웃 넘으면 `session.unlocked=false`도 같이 맞춤.
+  - `AuthController`/`AuthService`에 신규 라우트 3개:
+    - `GET /auth/settings` → `{ autoLockMinutes }`
+    - `POST /auth/settings/auto-lock-minutes` (`UnlockedGuard`) → DB 갱신 +
+      `unlockKeyStore.updateAutoLockMinutes()`로 현재 세션에도 즉시 반영
+    - `POST /auth/master-password/change` (`UnlockedGuard`, body: `currentPassword`,
+      `newPassword`) → `AuthService.changeMasterPassword()`: 현재 비밀번호 검증 →
+      새 kdfSalt/키 유도 → 이 사용자의 모든 `Account.encryptedPassword`를 새 키로
+      재암호화(트랜잭션) → `User.masterPasswordHash/masterKdfSalt` 갱신 → **등록된
+      `TrustedDevice`(WebAuthn) 전부 삭제**(옛 비밀번호로 기기에 감싸둔 값이 무효화되므로,
+      사용자가 새 비밀번호로 재등록해야 함) → 현재 세션은 새 키로 계속 unlocked 유지.
+      Gmail 토큰은 서버 관리 키(7.2 옵션 a)라 영향 없음 — 그래서 이번엔 건드릴 필요 없었음.
+    - `GET /auth/me`가 이제 `AuthService.checkStillUnlocked()`를 호출해서 idle 타임아웃을
+      화면 전환(apps/web `proxy.ts`의 매 네비게이션 `/auth/me` 체크) 시점에도 반영함.
+  - **다음에 할 일 (프론트)**: `apps/web/.../settings/page.tsx`에
+    1) 마스터 비밀번호 변경 폼(현재/새 비밀번호 입력, 성공 시 "등록된 생체인증 기기가 모두
+       해제되었습니다" 안내 + 기기 목록 새로고침),
+    2) 자동 잠금 시간 설정(숫자 입력 또는 select, `GET/POST /auth/settings*` 연동)
+    을 붙이면 이 항목은 끝남. 백엔드 API는 이미 다 준비되어 있음.
+  - **아직 전혀 실사용 테스트 안 함** — 특히 마스터 비밀번호 변경은 재암호화 트랜잭션이라
+    실제 브라우저로 계정 1개 이상 있는 상태에서 변경 전/후 비밀번호 복호화가 맞는지,
+    TrustedDevice가 실제로 지워지는지 꼭 확인해야 함.
+- [ ] **백업/복구 (설정 화면)** — **아직 손도 안 댐.** 기획서 3.3/7장은 "백업/복구"를
+  마스터 비밀번호 분실 복구 수단처럼 언급하지만, 그 용도는 이미 2026-09-15 첫 번째 정지
+  시점에 옵션 B(복구 없음 정책)로 확정됨(위 항목 참고) — 그러니 여기서 만들 "백업"은
+  복구 수단이 아니라 **암호화된 데이터 내보내기/가져오기**(Bitwarden류 encrypted export와
+  동일한 개념: 내보낸 파일도 여전히 마스터 비밀번호가 있어야 풀림, 새로운 접근 경로를
+  열지 않음)로 해석해서 구현할 계획이었음 — 다음 세션에서 이 해석이 맞는지 사용자에게
+  먼저 확인하고 시작할 것. 아직 API/화면 설계도 안 한 상태.
+- **커밋 안 함.** `git status`에 아래 파일들이 수정/추가 상태로 남아있음:
+  `apps/api/src/{app.module.ts, mail/mail.module.ts, mail/candidates/candidates.service.ts,
+  mail/rules/rules.{controller,service}.ts, auth/auth.{controller,service}.ts,
+  auth/guards/unlocked.guard.ts, auth/unlock-key-store.service.ts, package.json}`,
+  `apps/api/src/mail/candidates/scan-scheduler.service.ts`(신규),
+  `apps/web/src/app/(app)/mail/rules/page.tsx`, `prisma/schema.prisma`,
+  `prisma/migrations/20260915174804_add_auto_lock_minutes/`(신규), `package-lock.json`.
+  둘 다 `npm run build`는 통과 확인함(`apps/api`, `apps/web`).
+- **다음 세션 시작 순서 추천**: 위 "설정 화면" 프론트엔드부터 이어서 끝내기 → 브라우저로
+  마스터 비밀번호 변경/자동 잠금 실사용 검증 → 백업/복구 기능 설계 확인 후 구현 → 전부
+  끝나면 문서(`docs/`, 이 파일의 체크리스트) 정리하고 커밋.
+
 ## 지금 세션 일시정지 시점 (2026-09-15) — 다음 세션 시작할 때 먼저 볼 것
 
 - **핵심 기능(계정 관리, 인증 전체, Gmail 메일 정리)은 전부 실사용 검증까지 끝났다.**

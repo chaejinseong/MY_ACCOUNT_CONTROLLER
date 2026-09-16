@@ -35,6 +35,7 @@ model User {
   googleEmail         String   @map("google_email")
   masterPasswordHash  String   @map("master_password_hash")
   masterKdfSalt       String   @map("master_kdf_salt")
+  autoLockMinutes     Int      @default(15) @map("auto_lock_minutes")
   createdAt           DateTime @default(now()) @map("created_at")
 
   accounts             Account[]
