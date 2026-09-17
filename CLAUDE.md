@@ -3,6 +3,82 @@
 이 파일은 Claude Code(터미널)가 세션 시작 시 자동으로 읽는 파일입니다.
 Cowork 채팅에서 기획~설계~초기 구현까지 진행하다 이어받는 시점의 상태를 요약합니다.
 
+## 지금 세션 일시정지 시점 (2026-09-17, 네 번째 정지 — Cowork에서 검증 완료)
+
+이전 정지(2026-09-16) 이후, 사용자가 직접 두 서버(docker compose, api, web)를 재기동했고
+Cowork 세션에서 실사용 브라우저 검증을 마쳤다.
+
+### 검증 결과 (모두 통과)
+1. **자동 스캔 수동 트리거** (`POST /email-candidates/scan`, "오늘의 검토함" → "지금 스캔" 버튼)
+   - 정상 동작 확인: "계정 1개 스캔, 새 후보 0건 발견" 응답, 콘솔/네트워크 에러 없음.
+   - 후보 0건은 버그가 아니라 현재 받은편지함에 3개 메일 규칙에 매칭되는 새 메일이 없어서임.
+2. **마스터 비밀번호 변경** (`POST /auth/master-password/change`, 설정 화면)
+   - 사용자가 직접 실제 비밀번호로 변경 실행 (Claude는 비밀번호를 대신 입력하지 않음 — 정책상 금지).
+   - 변경 후 "신뢰된 기기" 목록이 "등록된 기기가 없습니다"로 바뀐 것 확인 → WebAuthn 기기 전체
+     해제 로직 정상 동작.
+   - 변경 후 "계정 관리" 목록이 에러 없이 정상 로드됨 → 저장된 계정 비밀번호가 새 마스터 비밀번호로
+     재암호화되어 정상적으로 복호화 가능함을 간접 확인.
+
+### 디버깅 메모 (이번 세션에서 시간을 많이 씀)
+로그인 페이지에서 "Google로 로그인" 클릭 시 "Failed to fetch"가 계속 발생했던 문제는 **앱 버그가
+아니라 Claude의 격리된 브라우저 도구(Claude Browser pane) 자체의 cross-origin 요청 차단** 때문이었다.
+- `localhost:3000`(프론트) → `localhost:3001`(백엔드) 요청이 `net::ERR_BLOCKED_BY_CLIENT`로 막힘.
+- 그 브라우저 도구의 site 접근 허용(request_access)을 3001에 대해 "site" 스코프로 승인해도
+  fetch/XHR 차단은 풀리지 않음 (직접 navigate로 3001에 접근하는 건 됨 — 즉 top-level 이동과
+  페이지 내부 fetch 차단은 별개 메커니즘으로 보임).
+- 실제 사용자의 진짜 Chrome(Claude in Chrome 확장, `mcp__claude-in-chrome__*`)으로 바꿔서 테스트하니
+  이미 로그인되어 있었고 전혀 문제 없었음. 즉 백엔드 CORS 설정(`apps/api/src/main.ts`의
+  `app.enableCors({ origin: 'http://localhost:3000', credentials: true })`)은 정상이고, 실제 브라우저
+  환경에서는 문제가 재현되지 않음.
+- **교훈**: 이 프로젝트처럼 프론트(3000)/백엔드(3001) 포트가 분리된 크로스오리진 구조를 Cowork에서
+  검증할 때는 Claude의 내장 브라우저 창(Claude Browser pane)이 아니라 Claude in Chrome(사용자의 실제
+  Chrome)을 쓸 것. 내장 브라우저 창은 이런 로컬 크로스포트 fetch를 구조적으로 막을 가능성이 있다.
+
+### 부가기능 1 - 비밀번호 생성기 (완료, 2026-09-17)
+사용자가 "비밀번호 생성기만 먼저" 진행하기로 결정 (데이터 export/import는 보류).
+
+- 백엔드: `POST /accounts/generate-password` 추가 (`accounts.controller.ts`,
+  `accounts.service.ts`). 옵션: `length`(8~64, 기본 16), `includeUppercase/Lowercase/
+  Numbers/Symbols`(기본 전부 true). 헷갈리는 문자(I/l/O/0/1) 제외한 문자셋 사용,
+  선택된 각 문자 종류가 최소 1개씩 포함되도록 보장 후 Fisher-Yates 셔플. `node:crypto`의
+  `randomInt` 사용 (암호학적으로 안전한 난수). `AccountsController`가 클래스 레벨
+  `@UseGuards(UnlockedGuard)`라 이 엔드포인트도 잠금 해제된 세션에서만 호출 가능 (설계상
+  자연스러움 — 어차피 계정 등록 폼 안에서만 쓰임).
+- 프론트: 공용 `apps/web/src/components/PasswordField.tsx` 컴포넌트 신규 생성 (보기/숨기기
+  토글 + "자동 생성" 버튼). `accounts/new/page.tsx`와 `accounts/[id]/page.tsx`(수정 폼)의
+  비밀번호 입력을 이 컴포넌트로 교체.
+- 검증: `tsc --noEmit` (api, web 둘 다 클린) + 실제 Chrome에서 "자동 생성" 클릭 →
+  `POST /accounts/generate-password` 201 응답, 필드에 16자리 비밀번호 정상 채워짐,
+  콘솔 에러 없음 확인.
+- **아직 git add/commit 안 됨** — 이 세션(Cowork)도 device_bash로 git write를 못하는 동일한
+  제약이 있으므로, 사용자가 본인 터미널에서 직접 `git add`/`git commit`/`git push` 진행 필요.
+
+### 부가기능 2 - 대시보드 요약 카드 (완료, 2026-09-17)
+`(app)/page.tsx`가 그동안 "메일 규칙/후보 기능이 준비되면 채워질 예정" placeholder였는데,
+이미 관련 기능(계정/후보/중요메일)이 다 구현되어 있었어서 바로 채웠다.
+
+- `GET /accounts`, `GET /email-candidates`, `GET /email-candidates/important-summary` 3개를
+  개별 호출(Promise.all 대신 각자 catch)해서 카드 3개(등록된 계정 수 / 오늘의 검토함 대기 수 /
+  중요 메일 총건수)로 표시. 카드 클릭 시 해당 화면으로 이동.
+- 새 파일 추가 없음, `apps/web/src/app/(app)/page.tsx` 전체 교체.
+- 검증: `tsc --noEmit` 클린 + 실제 Chrome에서 확인 — "등록된 계정 1개 / 오늘의 검토함 0건 대기 중 /
+  중요 메일 7건" 실데이터 정상 표시, 콘솔 에러 없음.
+- **아직 git add/commit 안 됨** — 사용자가 직접 커밋 필요.
+
+### 다음 단계
+검증이 끝났으므로, 그동안 보류해뒀던 "부가기능" 범위 논의로 넘어갈 차례:
+- 비밀번호 생성기 (기술설계서 §3.2 `POST /accounts/generate-password` + 계정 등록 폼에 버튼) — 거의
+  확정된 항목, 설계만 확인하고 바로 구현 가능.
+- 데이터 백업/내보내기(export/import) 기능 — 신규 논의 필요. 기존 "백업/복구"는 마스터 비밀번호
+  복구 키(옵션 A, 거부됨)를 가리켰던 것이었고 데이터 export와는 무관하다는 게 이번에 명확해짐.
+  현재 설정 화면에 "백업/복구 설정은 준비 중입니다"라는 placeholder 문구만 있음.
+
+git push는 사용자가 자신의 터미널에서 직접 진행함 (Cowork/device_bash는 `.git/index.lock`을 안전하게
+다루지 못하는 구조적 제약이 있어 git 쓰기 작업은 항상 사용자 터미널에서 하는 게 맞음 — 위 세 번째
+정지 기록 참고).
+
+---
+
 ## 지금 세션 일시정지 시점 (2026-09-16, 세 번째 정지 — Cowork에서 대신 작업) — 다음 세션 시작할 때 먼저 볼 것
 
 **터미널 세션을 못 쓰는 상황이라 Cowork 세션이 대신 상태를 확인/정리함.**
