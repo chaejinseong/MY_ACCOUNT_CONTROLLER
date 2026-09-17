@@ -12,10 +12,12 @@ export class CandidatesService {
     private readonly providerRegistry: MailProviderRegistryService,
   ) {}
 
+  // 프론트에서 "승인"이 실제로 뭘 하는지(삭제/스팸/중요 표시) 보여줄 수 있도록 actionType을 같이 내려준다.
   findPending(userId: string) {
     return this.prisma.emailCandidate.findMany({
       where: { status: 'PENDING', emailAccount: { userId } },
       orderBy: { receivedAt: 'desc' },
+      include: { rule: { select: { actionType: true } } },
     });
   }
 

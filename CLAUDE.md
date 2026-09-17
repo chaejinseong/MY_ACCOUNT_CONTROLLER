@@ -65,6 +65,46 @@ Cowork 세션에서 실사용 브라우저 검증을 마쳤다.
   중요 메일 7건" 실데이터 정상 표시, 콘솔 에러 없음.
 - **아직 git add/commit 안 됨** — 사용자가 직접 커밋 필요.
 
+### 부가기능 3 - 데이터 백업/내보내기 (완료, 2026-09-17)
+사용자가 "평문으로 내보내면 PC 해킹 시 위험하다"고 정확히 지적 → 마스터 비밀번호와는 별개의
+"내보내기 비밀번호"로 파일 자체를 재암호화하는 방식으로 설계 확정. 백업 범위는 Account(계정
+비밀번호)만 — EmailAccount의 OAuth 토큰은 보안상 제외(새 기기에서는 재로그인으로 재연결).
+
+- 백엔드: `POST /accounts/export`, `POST /accounts/import` 추가 (`accounts.controller.ts`,
+  `accounts.service.ts`). 기존 `CryptoService`(Argon2id KDF + AES-256-GCM)를 그대로 재사용 —
+  내보내기 비밀번호 + 새로 생성한 salt로 키를 유도해 JSON 배열 전체를 암호화. 파일 형식:
+  `{ version: 1, exportedAt, salt, payload }`. 가져오기는 같은 방식으로 복호화 후 각 항목을
+  기존 `create()`에 통과시켜 (urlOrAppName, loginId) 중복이면 스킵(카운트만 증가), 있으면 등록.
+  틀린 비밀번호로 복원 시도하면 AES-GCM 인증 태그 불일치를 잡아 400 + 친절한 한국어 에러로 변환.
+- 프론트: `settings/page.tsx`에 `BackupSection` 신규 컴포넌트 추가 (내보내기: 비밀번호 입력 →
+  Blob으로 JSON 파일 다운로드 / 가져오기: 파일 선택 + 비밀번호 입력 → 결과 메시지). 기존
+  "백업/복구 설정은 준비 중입니다" placeholder 제거.
+- 검증: `tsc --noEmit` 클린 + 실제 Chrome 콘솔에서 fetch로 export→import 라운드트립 직접 실행
+  (파일 다운로드 없이): export 201(payload에 평문 계정명/이메일 안 섞여있음 확인) → 같은 데이터로
+  import 시 `{imported:0, skipped:1}`(중복 정상 스킵) → 틀린 비밀번호로 import 시 400 +
+  "내보내기 비밀번호가 올바르지 않거나 파일이 손상되었습니다." 정상 확인.
+
+### 개선 - 오늘의 검토함 승인/제외 버튼 라벨 명확화 (완료, 2026-09-17)
+사용자가 "승인/제외 버튼만 있어서 뭘 하는건지 헷갈린다"고 피드백 — 특히 "승인"이 실제로는
+규칙에 따라 Gmail에서 메일을 삭제/스팸 처리할 수도 있다는 게 버튼 문구만 봐서는 안 드러났음.
+
+- 백엔드: `CandidatesService.findPending()`이 `rule: { select: { actionType } } }`를 include하도록
+  변경 — 프론트가 각 후보의 실제 규칙 종류를 알 수 있게.
+- 프론트: `mail/review/page.tsx`에 `actionType`별 뱃지/버튼문구/설명 매핑 추가.
+  - `delete_candidate` → 뱃지 "삭제 대상", 버튼 "삭제하기", 설명 "승인하면 이 메일을 Gmail에서
+    실제로 삭제합니다."
+  - `spam_candidate` → 뱃지 "스팸 대상", 버튼 "스팸 처리"
+  - `important` → 뱃지 "중요 메일", 버튼 "중요 표시 확인", 설명 "메일함은 그대로 두고 표시만 함"
+  - "제외" 버튼도 "무시하고 두기"로 문구 변경 (아무 조치 안 하고 이 후보만 숨긴다는 뜻 명확화).
+- 검증: `tsc --noEmit` 클린. 단, 지금 실제로 대기 중인 후보 메일이 0건이라 뱃지가 실제로 렌더링된
+  화면은 아직 눈으로 확인 못함 — 다음에 "지금 스캔"으로 새 후보가 잡히면 화면에서 뱃지/문구가
+  의도대로 보이는지 한 번 더 확인 필요.
+
+**둘 다 아직 git add/commit 안 됨** — 사용자가 직접 커밋 필요. 이번엔 `.git/index.lock`이
+Cowork(device_bash)가 아니라 사용자 본인 터미널에서도 발생했었음(원인 불명, 실제 git 프로세스는
+없었음 — `ps aux`로 확인 후 `rm -f .git/index.lock`으로 해결). 다음에 또 발생하면 같은 방법으로
+확인 후 지우면 된다.
+
 ### 다음 단계
 검증이 끝났으므로, 그동안 보류해뒀던 "부가기능" 범위 논의로 넘어갈 차례:
 - 비밀번호 생성기 (기술설계서 §3.2 `POST /accounts/generate-password` + 계정 등록 폼에 버튼) — 거의

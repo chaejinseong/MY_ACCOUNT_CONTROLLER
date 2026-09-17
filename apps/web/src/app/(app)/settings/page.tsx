@@ -76,8 +76,9 @@ export default function SettingsPage() {
     <div className="max-w-md space-y-8">
       <div className="space-y-2">
         <h1 className="text-xl font-semibold">설정</h1>
-        <p className="text-sm text-neutral-500">백업/복구 설정은 준비 중입니다.</p>
       </div>
+
+      <BackupSection />
 
       <AutoLockSection />
 
@@ -303,6 +304,139 @@ function ChangeMasterPasswordSection({ onChanged }: { onChanged: () => void }) {
       </form>
       {info && <p className="text-sm text-green-700 dark:text-green-500">{info}</p>}
       {error && <p className="text-sm text-red-600">{error}</p>}
+    </section>
+  );
+}
+
+function BackupSection() {
+  const [exportPassword, setExportPassword] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportInfo, setExportInfo] = useState<string | null>(null);
+
+  const [importPassword, setImportPassword] = useState("");
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importInfo, setImportInfo] = useState<string | null>(null);
+
+  async function handleExport(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setExportError(null);
+    setExportInfo(null);
+    setExporting(true);
+    try {
+      const file = await apiFetch<{ version: number; exportedAt: string; salt: string; payload: string }>(
+        "/accounts/export",
+        { method: "POST", body: JSON.stringify({ exportPassword }) },
+      );
+      const blob = new Blob([JSON.stringify(file, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const stamp = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `account-backup-${stamp}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setExportInfo("백업 파일을 다운로드했습니다. 내보내기 비밀번호를 잊지 않도록 안전한 곳에 따로 기록해두세요.");
+      setExportPassword("");
+    } catch (err) {
+      setExportError(getErrorMessage(err, "내보내기에 실패했습니다."));
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function handleImport(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setImportError(null);
+    setImportInfo(null);
+    if (!importFile) {
+      setImportError("백업 파일을 선택하세요.");
+      return;
+    }
+    setImporting(true);
+    try {
+      const text = await importFile.text();
+      const file = JSON.parse(text);
+      const result = await apiFetch<{ imported: number; skipped: number }>("/accounts/import", {
+        method: "POST",
+        body: JSON.stringify({ exportPassword: importPassword, file }),
+      });
+      setImportInfo(
+        result.skipped > 0
+          ? `${result.imported}개 복원, ${result.skipped}개는 이미 있어서 건너뛰었습니다.`
+          : `${result.imported}개 복원했습니다.`,
+      );
+      setImportPassword("");
+      setImportFile(null);
+      (event.target as HTMLFormElement).reset();
+    } catch (err) {
+      setImportError(
+        err instanceof SyntaxError ? "올바른 백업 파일이 아닙니다." : getErrorMessage(err, "가져오기에 실패했습니다."),
+      );
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  return (
+    <section className="space-y-3">
+      <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">백업 / 복구</h2>
+      <p className="text-xs text-neutral-500">
+        계정 목록을 파일로 내보내거나, 내보낸 파일에서 복원합니다. 마스터 비밀번호와는 별개의
+        &quot;내보내기 비밀번호&quot;로 파일을 암호화하므로, 그 비밀번호를 잊으면 해당 백업 파일은
+        복구할 수 없습니다.
+      </p>
+
+      <form onSubmit={handleExport} className="space-y-2 rounded border border-neutral-200 p-3 dark:border-neutral-800">
+        <p className="text-xs font-medium text-neutral-600 dark:text-neutral-400">내보내기</p>
+        <input
+          type="password"
+          required
+          minLength={8}
+          value={exportPassword}
+          onChange={(e) => setExportPassword(e.target.value)}
+          placeholder="내보내기 비밀번호 (8자 이상)"
+          className="w-full rounded border border-neutral-300 px-3 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+        />
+        <button
+          type="submit"
+          disabled={exporting}
+          className="rounded bg-neutral-900 px-3 py-1.5 text-sm text-white disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
+        >
+          {exporting ? "내보내는 중..." : "파일로 내보내기"}
+        </button>
+        {exportInfo && <p className="text-sm text-green-700 dark:text-green-500">{exportInfo}</p>}
+        {exportError && <p className="text-sm text-red-600">{exportError}</p>}
+      </form>
+
+      <form onSubmit={handleImport} className="space-y-2 rounded border border-neutral-200 p-3 dark:border-neutral-800">
+        <p className="text-xs font-medium text-neutral-600 dark:text-neutral-400">가져오기</p>
+        <input
+          type="file"
+          accept="application/json"
+          onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
+          className="block w-full text-sm text-neutral-600 dark:text-neutral-400"
+        />
+        <input
+          type="password"
+          required
+          value={importPassword}
+          onChange={(e) => setImportPassword(e.target.value)}
+          placeholder="그 파일을 만들 때 쓴 내보내기 비밀번호"
+          className="w-full rounded border border-neutral-300 px-3 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+        />
+        <button
+          type="submit"
+          disabled={importing}
+          className="rounded border border-neutral-300 px-3 py-1.5 text-sm disabled:opacity-50 dark:border-neutral-700"
+        >
+          {importing ? "가져오는 중..." : "파일에서 복원"}
+        </button>
+        {importInfo && <p className="text-sm text-green-700 dark:text-green-500">{importInfo}</p>}
+        {importError && <p className="text-sm text-red-600">{importError}</p>}
+      </form>
     </section>
   );
 }
