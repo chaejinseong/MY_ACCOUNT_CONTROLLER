@@ -3,11 +3,13 @@
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { apiFetch, getErrorMessage } from "@/lib/api";
+import { PasswordField } from "@/components/PasswordField";
 
 export default function NewAccountPage() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [password, setPassword] = useState("");
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -23,7 +25,7 @@ export default function NewAccountPage() {
           urlOrAppName: form.get("urlOrAppName"),
           category: form.get("category"),
           loginId: form.get("loginId"),
-          password: form.get("password"),
+          password,
           memo: form.get("memo") || undefined,
         }),
       });
@@ -43,7 +45,7 @@ export default function NewAccountPage() {
         <Field label="URL 또는 앱 이름" name="urlOrAppName" required />
         <Field label="카테고리" name="category" placeholder="금융/쇼핑/SNS/업무/기타" required />
         <Field label="아이디" name="loginId" required />
-        <Field label="비밀번호" name="password" type="password" required />
+        <PasswordField label="비밀번호" value={password} onChange={setPassword} required />
         <Field label="메모" name="memo" />
 
         {error && <p className="text-sm text-red-600">{error}</p>}

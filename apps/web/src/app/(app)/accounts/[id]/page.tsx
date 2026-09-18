@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { use, useEffect, useState, type FormEvent } from "react";
 import { apiFetch, getErrorMessage } from "@/lib/api";
+import { PasswordField } from "@/components/PasswordField";
 
 interface AccountDetail {
   id: string;
@@ -22,6 +23,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
   const [showPassword, setShowPassword] = useState(false);
   const [editing, setEditing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
 
   useEffect(() => {
     apiFetch<AccountDetail>(`/accounts/${id}`)
@@ -35,7 +37,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
     setSubmitting(true);
 
     const form = new FormData(event.currentTarget);
-    const password = form.get("password") as string;
+    const password = newPassword;
 
     try {
       const updated = await apiFetch<AccountDetail>(`/accounts/${id}`, {
@@ -51,6 +53,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
         }),
       });
       setAccount({ ...updated, password: password || account!.password });
+      setNewPassword("");
       setEditing(false);
     } catch (err) {
       setError(getErrorMessage(err, "저장하지 못했습니다."));
@@ -82,7 +85,7 @@ export default function AccountDetailPage({ params }: { params: Promise<{ id: st
           <Field label="URL 또는 앱 이름" name="urlOrAppName" defaultValue={account.urlOrAppName} required />
           <Field label="카테고리" name="category" defaultValue={account.category} required />
           <Field label="아이디" name="loginId" defaultValue={account.loginId} required />
-          <Field label="새 비밀번호 (변경 시에만 입력)" name="password" type="password" />
+          <PasswordField label="새 비밀번호 (변경 시에만 입력)" value={newPassword} onChange={setNewPassword} />
           <Field label="메모" name="memo" defaultValue={account.memo ?? ""} />
 
           {error && <p className="text-sm text-red-600">{error}</p>}
